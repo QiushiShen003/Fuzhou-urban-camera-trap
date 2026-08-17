@@ -152,7 +152,6 @@ head(speciescount_updated)
 cat("New RAI columns have been written and exported to species_inventory.xlsx.\n")
 
 ```
-
 # Calculate distances between cameras
 ```{r}
 # Load required packages
