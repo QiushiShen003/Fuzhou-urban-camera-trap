@@ -282,3 +282,83 @@ model_season_glmm <- glmmTMB(
 
 summary(model_season_glmm)
 ```
+
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location + Taxonomy + Season + offset(log(Season_Duration)) + (1|Camera),
+  data = glmm_input_seasonal, 
+  family = poisson(link = "log")
+)
+
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location + Taxonomy + Season + log(Season_Duration) + (1|Camera),
+  data = glmm_input_seasonal, 
+  family = poisson(link = "log")
+)
+
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location + Taxonomy + Season + log(Season_Duration) + (1|Camera),
+  data = glmm_input_seasonal, 
+  family = nbinom2
+)
+
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location* Taxonomy +Season+ log(Season_Duration) + (1|Camera), 
+  data = glmm_input_seasonal, 
+  family = poisson(link = "log")
+)
+
+#the chosen one
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location* Taxonomy +Season* Taxonomy+ log(Season_Duration) + (1|Camera), 
+  data = glmm_input_seasonal, 
+  family = poisson(link = "log")
+)
+
+summary(model_season_glmm)
+```
+
+
+```{r}
+tidy_results <- tidy(model_season_glmm, conf.int = TRUE, effects = "ran_pars")
+print(tidy_results)
+(exp(0.17436422)^2)
+
+model_ci <- confint(model_season_glmm, method = "profile")
+print(model_ci)
+
+# model's % variantion explained (R-squared) 
+r2_overall <- r.squaredGLMM(model_season_glmm)
+print(r2_overall)
+
+simulated_res <- simulateResiduals(fittedModel = model_season_glmm, plot = TRUE)
+
+testDispersion(simulated_res)       
+testZeroInflation(simulated_res)     
+
+# ==============================================================================
+# 5. emmeans to report model-predicted values
+# ==============================================================================
+pred_emmeans <- emmeans(model_season_glmm, 
+                        specs = ~ Location + Taxonomy, 
+                        at = list(Season_Duration = 100), 
+                        type = "response")
+
+print("===== model-predicted number of species in 100 days =====")
+print(pred_emmeans)
+
+library(emmeans)
+
+# 1. each combinitaion's marginal means (Season_Duration = 100）
+pred_emmeans_int <- emmeans(model_season_glmm, 
+                            specs = ~ Taxonomy | Location, 
+                            at = list(Season_Duration = 100), 
+                            type = "response")
+
+# 2. print predicted values
+print(pred_emmeans_int)
+
+# 3, Post hoc comparison
+pairwise_comparisons <- pairs(pred_emmeans_int)
+print(pairwise_comparisons)
+
+```
