@@ -1,0 +1,180 @@
+---
+title: "For_pub"
+output: html_document
+date: "2025-09-28"
+---
+
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+data <- read_excel("Data.xlsx")
+speciescount <- read_excel("species_inventory.xlsx")
+#对接物种中文英文名
+data <- merge(data,speciescount,by.x="Species",by.y = "Chinese_Name",all.x = TRUE)
+data <- data %>% filter(Taxonomy %in% c("Bird","Mammal"))
+dataF <- subset(data, Camera %in% c("F1","F2","F3","F4","F5","F6","F8","F9","FT10","FT11","FT12","FT13","FT14"))
+dataQ <- subset(data, Camera %in% c("Q1","Q2","Q3","Q4","Q5","Q6","Q7","QT7","Q8","Q10","QT10"))
+
+data_clean <- data %>% dplyr::select(Location, Camera, Common_Name, Taxonomy, Date, Number)
+
+data_clean <- data_clean %>%
+  # 1. Remove rows where Common_Name is feral dog or feral cat
+  filter(!Common_Name %in% c("rat","shrew","bat","leaf warbler")) %>%
+  
+  # 2. Remove rows where Camera is one of the FT series listed
+  filter(!Camera %in% c("FT10", "FT11", "FT12", "FT13", "FT14")) %>%
+  
+  # 3. Rename QT7 to Q7 and QT10 to Q10
+  mutate(Camera = case_when(
+    Camera == "QT7" ~ "Q7",
+    Camera == "QT10" ~ "Q10",
+    TRUE ~ Camera # Keep all other camera names the same
+  )) %>%
+  
+  # 4. Rerank (sort) the dataframe by Camera
+  arrange(Camera)
+
+data_time_controlled <- data_clean %>%
+  # 1. Ensure the Date column is properly formatted as a Date object
+  mutate(Date = as.Date(Date)) %>% 
+  # 2. Filter for the date range (inclusive)
+  filter(Date >= as.Date("2024-07-05") & Date <= as.Date("2025-02-10"))
+
+Nsp_time_controlled <- data_time_controlled %>% group_by(Location, Taxonomy) %>%
+  summarise(N_Species = n_distinct(Common_Name), .groups = "drop")
+
+#install.packages("iNEXT")
+library(iNEXT)
+library(tidyr)
+library(tibble)
+data_mammal <- data %>% filter(Taxonomy == "Mammal")
+data_mammal <- subset(data_mammal, !(Common_Name%in% c("rat","shrew","bat")))
+
+data_extrapo_mammal <- data_mammal %>%
+  # 确保日期格式正确
+  mutate(Date = as.Date(Date)) %>%
+  # 按物种和样地分组，计算每个物种在每个样地的唯一记录天数
+  group_by(Common_Name, Location) %>%
+  summarise(Days_Recorded = n_distinct(Date), .groups = 'drop') %>%
+  # 转换数据格式：物种为行，样地为列
+  pivot_wider(
+    names_from = Location,
+    values_from = Days_Recorded,
+    values_fill = 0  # 将缺失值填充为0
+  ) %>%
+  # 重命名第一列为"Species"
+  rename(Species = `Common_Name`)
+
+first_row_values <- c(2673,1839)
+# 获取样地列名（排除Species列）
+location_columns <- colnames(data_extrapo_mammal)[-1]
+
+# 创建第一行数据
+first_row <- data.frame(
+  Species = "Sample_Size",  # 第一行的标识
+  matrix(first_row_values, nrow = 1, 
+         dimnames = list(NULL, location_columns))
+)
+
+# 将第一行添加到数据框
+data_extrapo_mammal <- bind_rows(first_row, data_extrapo_mammal)
+data_extrapo_mammal <- data_extrapo_mammal %>% select(Fushan, Qishan)
+
+inext_result_mammal = iNEXT(data_extrapo_mammal, 
+  q = 0,                   
+  datatype = 'incidence_freq',
+  endpoint = 5000,           # 外推终点
+  nboot = 1000,
+  knots = 40)
+
+ggiNEXT(inext_result_mammal, type = 1) + 
+  labs(x = 'Monitoring Days', y = 'Number of Detected Mammal Species') + 
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    legend.background = element_rect(fill = "white", color = NA),
+    axis.line = element_line(color = 'black', size = 0.5),
+    axis.title.x = element_text(family = "Times New Roman", size = 12, color = "black", face = "bold", margin = margin(t = 15)),
+    axis.title.y = element_text(family = "Times New Roman", size = 12, color = "black", face = "bold", margin = margin(r = 15)),
+    axis.text.x  = element_text(family = "Times New Roman", size = 12, color = "black"),
+    axis.text.y  = element_text(family = "Times New Roman", size = 12, color = "black"),
+    plot.title = element_blank(),
+    legend.position = 'bottom'
+  )+
+    scale_y_continuous(breaks = seq(0,15, by = 2))
+
+```
+
+
+
+```{r}
+data_bird <- data %>% filter(Taxonomy == "Bird")
+data_bird <- subset(data_bird, Common_Name != "leaf warbler")
+
+data_extrapo_bird <- data_bird %>%
+  # 确保日期格式正确
+  mutate(Date = as.Date(Date)) %>%
+  # 按物种和样地分组，计算每个物种在每个样地的唯一记录天数
+  group_by(Common_Name, Location) %>%
+  summarise(Days_Recorded = n_distinct(Date), .groups = 'drop') %>%
+  # 转换数据格式：物种为行，样地为列
+  pivot_wider(
+    names_from = Location,
+    values_from = Days_Recorded,
+    values_fill = 0  # 将缺失值填充为0
+  ) %>%
+  # 重命名第一列为"Species"
+  rename(Species = `Common_Name`)
+
+# 获取样地列名（排除Species列）
+location_columns <- colnames(data_extrapo_bird)[-1]
+
+# 创建第一行数据
+first_row <- data.frame(
+  Species = "Sample_Size",  # 第一行的标识
+  matrix(first_row_values, nrow = 1, 
+         dimnames = list(NULL, location_columns))
+)
+
+# 将第一行添加到数据框
+data_extrapo_bird <- bind_rows(first_row, data_extrapo_bird)
+data_extrapo_bird <- data_extrapo_bird %>% select(Fushan, Qishan)
+
+inext_result_bird = iNEXT(data_extrapo_bird, 
+  q = 0,                   
+  datatype = 'incidence_freq',
+  endpoint = 5000,           # 外推终点
+  nboot = 500,
+  knots = 40)
+
+ggiNEXT(inext_result_bird, type = 1) + 
+  labs(x = 'Monitoring Days', y = 'Number of Detected Bird Species') + 
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    legend.background = element_rect(fill = "white", color = NA),
+    axis.line = element_line(color = 'black', size = 0.5),
+    axis.title.x = element_text(family = "Times New Roman", size = 12, color = "black", face = "bold", margin = margin(t = 15)),
+    axis.title.y = element_text(family = "Times New Roman", size = 12, color = "black", face = "bold", margin = margin(r = 15)),
+    axis.text.x  = element_text(family = "Times New Roman", size = 12, color = "black"),
+    axis.text.y  = element_text(family = "Times New Roman", size = 12, color = "black"),
+    plot.title = element_blank(),
+    legend.position = 'bottom'
+  )+
+    scale_y_continuous(breaks = seq(0,50, by = 10))
+
+```
+
+
+```{r}
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

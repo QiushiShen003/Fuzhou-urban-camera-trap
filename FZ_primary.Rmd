@@ -1,0 +1,498 @@
+---
+title: "FZ_new"
+output: html_document
+date: "2026-08-07"
+---
+
+```{r }
+library(tidyverse)    # 数据清洗与处理 (包含 dplyr, tidyr 等)
+library(lubridate)    # 日期与时间处理
+library(readxl)       # 读取 Excel 文件
+library(glmmTMB)      # 拟合广义线性混合模型 (GLMM)
+library(broom.mixed)  # 整洁地提取混合模型参数与置信区间
+library(DHARMa)       # 模型残差诊断与假设检验 (零膨胀、过离散)
+library(MuMIn)        # 计算模型的 R-squared
+library(emmeans)      # 计算估计边际均值 (Estimated Marginal Means)
+library(knitr)
+
+# 1. 读取相机工作历史表
+camera_info <- read_excel("Fuzhou_Camera_info.xlsx")
+
+# 2. 生成长表并计算“各季节”工作时长 (Season_Duration)
+seasonal_effort <- camera_info %>%
+  dplyr::select(Location, Camera, starts_with("Install"), starts_with("Check")) %>%
+  pivot_longer(
+    cols = starts_with(c("Install", "Check")),
+    names_to = c(".value", "Period_ID"),
+    names_pattern = "(Install|Check)(\\d+)",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(
+    Install = ymd(Install),
+    Check = ymd(Check)
+  ) %>%
+  filter(!is.na(Install) & !is.na(Check)) %>%
+  # 展开为逐日序列
+  mutate(Daily_Sequence = map2(Install, Check, ~seq(.x, .y, by = "day"))) %>%
+  unnest(Daily_Sequence) %>%
+  # 划分季节
+  mutate(
+    Month = month(Daily_Sequence),
+    Season = case_when(
+      Month %in% c(3, 4, 10, 11, 12) ~ "Migration",
+      Month %in% c(5, 6, 7, 8, 9) ~ "Summer",
+      Month %in% c(1, 2) ~ "Winter"
+    )
+  ) %>%
+  # 汇总按季节的时长
+  group_by(Location, Camera, Season) %>%
+  summarise(
+    Season_Duration = n(), # 修改点：命名为季节有效工作时长
+    .groups = 'drop'
+  )
+
+camera_total_duration <- seasonal_effort %>%
+  group_by(Camera) %>%
+  summarise(Duration_1 = sum(Season_Duration), .groups = 'drop')
+
+camera_info <- camera_info %>%
+  left_join(camera_total_duration, by = "Camera")
+
+
+
+```
+#计算RAI（新）
+```{r}
+data <- read_excel("Data.xlsx")
+speciescount <- read_excel("species_inventory.xlsx")
+#对接物种中文英文名
+data <- merge(data,speciescount,by.x="Species",by.y = "Chinese_Name",all.x = TRUE)
+data_clean <- data %>% dplyr::select(Location, Camera, Common_Name, Taxonomy, Date, Number)
+
+library(dplyr)
+library(tidyr)
+
+# 1. 清除名录遗漏导致的无效行 (Common_Name 为 NA)
+data_clean <- data_clean %>%
+  filter(!is.na(Common_Name))
+
+data_clean <- data_clean %>%
+  filter(Camera %in% camera_info$Camera)
+
+# 2. 计算福山和旗山各自的相机总监测时间长度
+# 根据你提供的表格结构，直接使用 camera_info 中的 Duration 列
+location_effort <- camera_info %>%
+  group_by(Location) %>%
+  summarise(Total_Duration = sum(Duration_1, na.rm = TRUE), .groups = "drop")
+
+# 3. 按 Location 和 Common_Name 计算加权物种数量，并推算新 RAI
+new_rai_calc <- data_clean %>%
+  # 按照 Number 加权算出每个物种拍摄到的数量
+  group_by(Location, Common_Name) %>%
+  summarise(Weighted_Count = sum(Number, na.rm = TRUE), .groups = "drop") %>%
+  # 对接总监测时长
+  left_join(location_effort, by = "Location") %>%
+  # 计算新 RAI: (数量 / 总时长) * 100
+  mutate(New_RAI = (Weighted_Count / Total_Duration) * 100)
+
+# 4. 将长表转为宽表 (分列展示福山和旗山)，以便与旧表无缝对接
+new_rai_wide <- new_rai_calc %>%
+  dplyr::select(Common_Name, Location, New_RAI) %>%
+  pivot_wider(
+    names_from = Location,
+    values_from = New_RAI,
+    names_prefix = "New_",      # 生成 New_Fushan 和 New_Qishan 的列名
+    values_fill = list(New_RAI = 0) # 如果某物种在另一个样地没拍到，RAI 自动补 0
+  ) %>%
+  rename(New_Fushan_RAI = New_Fushan, New_Qishan_RAI = New_Qishan)
+
+# 5. 与 speciescount 中的旧 RAI 进行对比提取
+rai_comparison <- speciescount %>%
+  # 保留需要的列，重命名以防混淆
+  dplyr::select(Common_Name, Old_Fushan_RAI = Fushan_RAI, Old_Qishan_RAI = Qishan_RAI) %>%
+  # 使用 inner_join 只对比我们在 data_clean 中有记录的有效物种
+  inner_join(new_rai_wide, by = "Common_Name") %>%
+  # 调整列顺序，将新旧数值放在相邻列直观对比
+  dplyr::select(
+    Common_Name,
+    Old_Fushan_RAI, New_Fushan_RAI,
+    Old_Qishan_RAI, New_Qishan_RAI
+  ) %>%
+  # 保留两位小数，方便肉眼比对
+  mutate(
+    Old_Fushan_RAI = round(as.numeric(Old_Fushan_RAI), 2),
+    New_Fushan_RAI = round(New_Fushan_RAI, 2),
+    Old_Qishan_RAI = round(as.numeric(Old_Qishan_RAI), 2),
+    New_Qishan_RAI = round(New_Qishan_RAI, 2)
+  )
+
+# 查看最终对比结果
+print(rai_comparison)
+
+library(openxlsx)
+
+# 1. 将新计算的 RAI 合并回原始名录表
+speciescount_updated <- speciescount %>%
+  # 【核心修复点】：防御性删除。
+  # 使用 any_of()，如果表里存在这俩列就先删掉，如果不存在也不会报错。
+  # 这样确保每次 run 都能干干净净地拼接最新的计算结果。
+  dplyr::select(-any_of(c("RAI_Fushan_n", "RAI_Qishan_n"))) %>%
+  
+  # 使用 left_join 确保不会丢失物种名录中原有的任何一行
+  left_join(new_rai_wide, by = "Common_Name") %>%
+  
+  # 2. 将列名重命名为你要求的名称
+  rename(
+    RAI_Fushan_n = New_Fushan_RAI,
+    RAI_Qishan_n = New_Qishan_RAI
+  ) %>%
+  
+  # 3. 数据清理：如果某物种在本次数据中完全没记录，合并后会是 NA，将其替换为 0
+  mutate(
+    RAI_Fushan_n = replace_na(RAI_Fushan_n, 0),
+    RAI_Qishan_n = replace_na(RAI_Qishan_n, 0)
+  )
+
+# 查看合并后的前几行，确保列名和数据正确
+head(speciescount_updated)
+
+# 4. 输出并覆盖保存为原本的 Excel 文件
+#write.xlsx(speciescount_updated, "species_inventory.xlsx", rowNames = FALSE)
+
+cat("新的 RAI 列已成功写入，并已导出至 species_inventory.xlsx 文件。\n")
+
+```
+
+#计算相机间距离
+```{r}
+# 加载必要的包
+library(tidyverse)
+library(readxl)
+library(geosphere) # 用于计算经纬度球面距离
+library(knitr)
+
+# 1. 读取并清洗相机数据
+camera_info <- read_excel("Fuzhou_Camera_info.xlsx")
+
+cam_coords <- camera_info %>%
+  # 剔除坐标中的非数字字符 (如 °N, °E) 并转为数值型
+  mutate(
+    Latitude = as.numeric(str_replace_all(Latitude, "[^0-9.]", "")),
+    Longitude = as.numeric(str_replace_all(Longitude, "[^0-9.]", "")),
+    Elevation = as.numeric(Elevation)
+  ) %>%
+  dplyr::select(Location, Camera, Longitude, Latitude, Elevation) %>%
+  drop_na(Latitude, Longitude, Elevation)
+
+# 2. 编写提取“最近邻距离 (NND)”的核心函数
+get_nn_distances <- function(df) {
+  # 如果该样地相机少于2台，无法计算距离
+  if(nrow(df) < 2) return(numeric(0)) 
+  
+  # A. 计算 2D 球面距离矩阵 (单位: 米)
+  dist2d_mat <- distm(df[, c("Longitude", "Latitude")])
+  
+  # B. 计算海拔垂直差矩阵 (单位: 米)
+  elev_mat <- as.matrix(dist(df$Elevation))
+  
+  # C. 勾股定理合成 3D 距离矩阵
+  dist3d_mat <- sqrt(dist2d_mat^2 + elev_mat^2)
+  
+  # D. 核心操作：将自己到自己的距离 (对角线的0) 设为 NA，防止被当成最小值提取
+  diag(dist3d_mat) <- NA
+  
+  # E. 按行寻找每台相机的最短距离 (即最近的一台相机的距离)
+  nn_dists <- apply(dist3d_mat, 1, min, na.rm = TRUE)
+  
+  return(nn_dists)
+}
+
+# 3. 分别计算各组相机的最近邻距离向量
+fushan_nn <- get_nn_distances(cam_coords %>% filter(Location == "Fushan"))
+qishan_nn <- get_nn_distances(cam_coords %>% filter(Location == "Qishan"))
+
+# 计算总体：将两地的所有“最近邻距离”汇总在一起
+overall_nn <- c(fushan_nn, qishan_nn)
+
+# 4. 汇总统计 Mean 和 SD
+distance_summary <- tibble(
+  Scope = c("Fushan", "Qishan", "Overall"),
+  Mean_Nearest_Distance_m = c(mean(fushan_nn), mean(qishan_nn), mean(overall_nn)),
+  SD_Nearest_Distance_m = c(sd(fushan_nn), sd(qishan_nn), sd(overall_nn)),
+  Camera_Count = c(length(fushan_nn), length(qishan_nn), length(overall_nn))
+) %>%
+  mutate(
+    # 保留两位小数
+    Mean_Nearest_Distance_m = round(Mean_Nearest_Distance_m, 2),
+    SD_Nearest_Distance_m = round(SD_Nearest_Distance_m, 2)
+  )
+
+# 5. 打印结果
+kable(distance_summary, format = "markdown")
+```
+
+
+#GLMM建模
+```{r}
+library(glmmTMB)
+library(MuMIn)
+data <- read_excel("Data.xlsx")
+speciescount <- read_excel("species_inventory.xlsx")
+#对接物种中文英文名
+data <- merge(data,speciescount,by.x="Species",by.y = "Chinese_Name",all.x = TRUE)
+data <- data %>% filter(Taxonomy %in% c("Bird","Mammal"))
+data_clean <- data %>% dplyr::select(Location, Camera, Common_Name, Taxonomy, Date, Number)
+
+data_clean <- data_clean %>%
+  filter(!Camera %in% c("FT10", "FT11", "FT12", "FT13", "FT14")) %>%
+  
+  mutate(Camera = case_when(
+    Camera == "QT7" ~ "Q7",
+    Camera == "QT10" ~ "Q10",
+    TRUE ~ Camera # Keep all other camera names the same
+  )) %>%
+  
+  arrange(Camera)
+
+glmm_input_seasonal <- data_clean %>%
+  filter(!Common_Name %in% c("bat", "rat", "shrew", "leaf warbler")) %>%
+  
+  # 判定物种记录所在的季节（需与时长计算标准绝对一致）
+  mutate(
+    Date = as.Date(Date),
+    Month = month(Date),
+    Season = case_when(
+      Month %in% c(3, 4, 10, 11, 12) ~ "Migration",
+      Month %in% c(5, 6, 7, 8, 9) ~ "Summer",
+      Month %in% c(1, 2) ~ "Winter"
+    )
+  ) %>%
+  
+  # 分季节统计物种数量
+  group_by(Location, Camera, Taxonomy, Season) %>% 
+  summarise(
+    Species_Number = n_distinct(Common_Name[Common_Name != "No_Species_Detected"]),
+    .groups = 'drop'
+  ) %>%
+  
+  # 结合第一步的工作时长数据 (使用 right_join 确保所有实际工作的季节都有记录基础)
+  right_join(seasonal_effort, by = c("Location", "Camera", "Season")) %>%
+  
+  # 将由于 merge 产生的未拍到动物的 Species_Number 的 NA 替换为 0
+  mutate(Species_Number = replace_na(Species_Number, 0)) %>%
+  
+  # 补齐零值：利用 nesting 确保每个【实际存在工作时间的】Camera+Season 组合下，
+  # 必定同时具有 Mammal 和 Bird 的行 (即便都是 0)
+  complete(nesting(Location, Camera, Season, Season_Duration), Taxonomy, fill = list(Species_Number = 0)) %>%
+  
+  # 清理由于 right_join 可能产生的 Taxonomy 为 NA 的空行
+  filter(!is.na(Taxonomy)) %>%
+  
+  # 安全起见，确保只有工作天数 > 0 的记录进入模型，避免 log(0) 错误
+  filter(Season_Duration > 0)
+```
+
+#模型运行
+```{r}
+library(glmmTMB)
+
+# 拟合 GLMM 模型
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location + Taxonomy + Season + offset(log(Season_Duration)) + (1|Camera),
+  data = glmm_input_seasonal, 
+  family = nbinom2 # 负二项分布处理过离散
+)
+
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location + Taxonomy + Season + offset(log(Season_Duration)) + (1|Camera),
+  data = glmm_input_seasonal, 
+  family = poisson(link = "log")
+)
+
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location + Taxonomy + Season + log(Season_Duration) + (1|Camera),
+  data = glmm_input_seasonal, 
+  family = poisson(link = "log")
+)
+
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location + Taxonomy + Season + log(Season_Duration) + (1|Camera),
+  data = glmm_input_seasonal, 
+  family = nbinom2
+)
+
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location* Taxonomy +Season+ log(Season_Duration) + (1|Camera), 
+  data = glmm_input_seasonal, 
+  family = poisson(link = "log")
+)
+
+model_season_glmm <- glmmTMB(
+  Species_Number ~ Location* Taxonomy +Season* Taxonomy+ log(Season_Duration) + (1|Camera), 
+  data = glmm_input_seasonal, 
+  family = poisson(link = "log")
+)
+
+summary(model_season_glmm)
+```
+
+#模型解释力和严谨性诊断
+```{r}
+# 提取固定效应和随机效应的 95% 置信区间 (制表用)
+# conf.int = TRUE 默认计算置信区间，effects = "all" 提取包括随机效应方差在内的所有参数
+tidy_results <- tidy(model_season_glmm, conf.int = TRUE, effects = "ran_pars")
+print("===== 模型系数与 95% CI =====")
+print(tidy_results)
+(exp(0.17436422)^2)
+
+model_ci <- confint(model_season_glmm, method = "profile")
+print(model_ci)
+
+# 提取模型的解释力 (R-squared) 
+# 使用 trigamma 方法精确计算非正态模型的 R2m (固定效应) 和 R2c (总体)
+r2_overall <- r.squaredGLMM(model_season_glmm)
+print("===== 模型的边际与条件 R-squared (选用 trigamma 行) =====")
+print(r2_overall)
+
+# ==============================================================================
+# 4. 模型严谨性诊断 (DHARMa 包)
+# ==============================================================================
+# 生成模拟残差 (基础)
+simulated_res <- simulateResiduals(fittedModel = model_season_glmm, plot = TRUE)
+
+# 执行各项学术级统计检验 (控制台会输出 P 值)
+testDispersion(simulated_res)         # 检验过离散 (p>0.05则通过)
+testZeroInflation(simulated_res)      # 检验零膨胀 (p>0.05则通过)
+
+# ==============================================================================
+# 5. 标准化边际均值预测 (emmeans) - 用于汇报模型预测值
+# ==============================================================================
+# 剔除各相机时长不一的干扰，计算标准化条件下的期望物种发生率
+# 设定 offset = log(100) 统一标准为“每100个工作日”
+pred_emmeans <- emmeans(model_season_glmm, 
+                        specs = ~ Location + Taxonomy, 
+                        # 使用 at 列表来指定连续变量的取值，预测第 100 天时的物种累积量
+                        at = list(Season_Duration = 100), 
+                        type = "response")
+
+print("===== 100个工作日标准下的模型预测物种数与置信区间 =====")
+print(pred_emmeans)
+
+library(emmeans)
+
+# 1. 计算各个组合的边际均值（假设 Season_Duration = 100）
+pred_emmeans_int <- emmeans(model_season_glmm, 
+                            specs = ~ Taxonomy | Location, # 这个语法表示：在每个 Location 内部，对比不同 Taxonomy
+                            at = list(Season_Duration = 100), 
+                            type = "response")
+
+# 2. 打印出各个组的预测值
+print(pred_emmeans_int)
+
+# 3. 进行事后两两对比（找出隐藏的显著性）
+# 这将直接告诉你：福山的鸟和兽差异多少？旗山的鸟和兽差异多少？
+pairwise_comparisons <- pairs(pred_emmeans_int)
+print(pairwise_comparisons)
+
+# ==============================================================================
+# 6. 生成附录/描述性统计摘要表：各相机原始数据与百天发现率
+# ==============================================================================
+# 该表呈现最真实的 Raw Data 与简单粗速率，解释为什么模型得出了均值反转的结果
+camera_wide <- data_clean %>%
+  filter(Taxonomy %in% c("Mammal", "Bird")) %>%
+  filter(!Common_Name %in% c("No_Species_Detected", "bat", "rat", "shrew")) %>%
+  group_by(Location, Camera, Taxonomy) %>%
+  summarise(
+    Species_Count = n_distinct(Common_Name),
+    Species_List = paste(sort(unique(Common_Name)), collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = Taxonomy,
+    values_from = c(Species_Count, Species_List),
+    values_fill = list(Species_Count = 0, Species_List = "None") 
+  ) %>%
+  rename(
+    Bird_Count = Species_Count_Bird, Mammal_Count = Species_Count_Mammal,
+    Bird_List = Species_List_Bird, Mammal_List = Species_List_Mammal
+  )
+```
+
+#检查数据：每台相机的物种数和工作时长
+```{r}
+library(tidyverse)
+library(knitr) # 用于输出整洁的Markdown表格
+
+# 1. 提取每台相机的总工作时长 (Total_Duration)
+# 这里假设上一回合中生成的 camera_info 已包含 Duration_1 列
+camera_effort <- camera_info %>%
+  dplyr::select(Location, Camera, Total_Duration = Duration_1)
+
+# 2. 从原始记录数据中分类提取并汇总鸟类和哺乳动物的信息
+camera_species_summary <- data_clean %>%
+  # 剔除无效记录和小型哺乳动物
+  filter(Taxonomy %in% c("Mammal", "Bird")) %>%
+  filter(!Common_Name %in% c("No_Species_Detected", "bat", "rat", "shrew")) %>%
+  
+  # 按样地、相机和类群分组汇总
+  group_by(Location, Camera, Taxonomy) %>%
+  summarise(
+    Species_Count = n_distinct(Common_Name),
+    # 将该相机拍到的所有该类群物种名拼接到一起
+    Species_List = paste(sort(unique(Common_Name)), collapse = ", "),
+    .groups = "drop"
+  )
+
+# 3. 宽表转换：将鸟类和哺乳动物的数据分列展示
+camera_wide <- camera_species_summary %>%
+  pivot_wider(
+    names_from = Taxonomy,
+    values_from = c(Species_Count, Species_List),
+    # 填充 0 和 "None"，防止某台相机完全没拍到某一类群
+    values_fill = list(Species_Count = 0, Species_List = "None") 
+  ) %>%
+  # 规范列名
+  rename(
+    Bird_Count = Species_Count_Bird,
+    Mammal_Count = Species_Count_Mammal,
+    Bird_List = Species_List_Bird,
+    Mammal_List = Species_List_Mammal
+  )
+
+# 4. 结合工作时长，计算每百天物种发现率，并整理最终表格
+camera_final_table <- camera_effort %>%
+  left_join(camera_wide, by = c("Location", "Camera")) %>%
+  # 处理可能因为从头到尾什么动物都没拍到而产生的 NA
+  mutate(
+    across(c(Bird_Count, Mammal_Count), ~replace_na(.x, 0)),
+    across(c(Bird_List, Mammal_List), ~replace_na(.x, "None"))
+  ) %>%
+  # 核心计算：粗速率 (每百天拍到多少种)
+  mutate(
+    Bird_Per_100d = round((Bird_Count / Total_Duration) * 100, 2),
+    Mammal_Per_100d = round((Mammal_Count / Total_Duration) * 100, 2)
+  ) %>%
+  # 调整列的顺序以便于查看
+  dplyr::select(
+    Location,
+    Camera,
+    Total_Duration,
+    Bird_Count,
+    Bird_Per_100d,
+    Mammal_Count,
+    Mammal_Per_100d,
+    Bird_List,
+    Mammal_List
+  ) %>%
+  # 排序：先按样地排，再按总有效时长降序排列
+  arrange(Location, desc(Total_Duration))
+
+# 5. 打印精美表格 (可以直接在 RStudio 或控制台查看)
+# 使用 kable 可以在输出时自动对齐，适合检查
+kable(camera_final_table, format = "markdown")
+
+library(openxlsx)
+# 可选：如果你想把这个表格导出到 Excel 里慢慢看
+write.xlsx (camera_final_table, "Camera_Detailed_Summary.xlsx", rowNames = FALSE)
+
+```
