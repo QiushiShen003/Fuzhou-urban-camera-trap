@@ -3,7 +3,7 @@ title: "For_pub_community_similarity"
 output: html_document
 date: "2026-01-08"
 ---
-#相似性分析
+# Similarity Analysis
 ```{r}
 library(readxl)
 library(dplyr)
@@ -11,7 +11,7 @@ library(ggplot2)
 library(lubridate)
 data <- read_excel("Data.xlsx")
 speciescount <- read_excel("species_inventory.xlsx")
-#对接物种中文英文名
+# Map species Chinese names to English names
 data <- merge(data,speciescount,by.x="Species",by.y = "Chinese_Name",all.x = TRUE)
 data <- data %>% filter(Taxonomy %in% c("Bird","Mammal"))
 dataF <- subset(data, Camera %in% c("F1","F2","F3","F4","F5","F6","F8","F9","FT10","FT11","FT12","FT13","FT14"))
@@ -103,22 +103,22 @@ ggplot(nmds_scores, aes(x = NMDS1, y = NMDS2, color = Location, fill = Location)
 
 ```
 
-#相似性分析II：只取都旗山福山在工作的时段
+# Similarity Analysis II: only use periods when both Qishan and Fushan cameras were operating
 ```{r}
-# ==============================================================================
-# 1. 加载所需的 R 包
-# ==============================================================================
+# ===============================================================================
+# 1. Load required R packages
+# ===============================================================================
 library(tidyverse)
 library(readxl)
 library(lubridate)
 library(vegan)
 
-# ==============================================================================
-# 2. 读取并处理相机工作历史，提取“重叠工作日期”
-# ==============================================================================
+# ===============================================================================
+# 2. Read and process camera deployment history, extract overlapping working dates
+# ===============================================================================
 camera_info <- read_excel("Fuzhou_Camera_info.xlsx")
 
-# 将宽表展开为逐日的时间序列
+# Expand the wide table into a daily time series
 camera_dates <- camera_info %>%
   dplyr::select(Location, Camera, starts_with("Install"), starts_with("Check")) %>%
   pivot_longer(
@@ -127,41 +127,41 @@ camera_dates <- camera_info %>%
     names_pattern = "(Install|Check)(\\d+)",
     values_drop_na = TRUE
   ) %>%
-  # 将字符或 Excel 日期格式统一转换为 Date 格式
+  # Normalize character/Excel date formats to Date
   mutate(
     Install = ymd(Install),
     Check = ymd(Check)
   ) %>%
   filter(!is.na(Install) & !is.na(Check)) %>%
-  # 展开每一段工作区间为逐日序列
+  # Expand each working period to a daily sequence
   mutate(Daily_Sequence = map2(Install, Check, ~seq(.x, .y, by = "day"))) %>%
   unnest(Daily_Sequence) %>%
   dplyr::select(Location, Camera, Daily_Sequence)
 
-# 分别提取两个样地有相机在工作的唯一日期集合
+# Extract unique dates where cameras were operating for the two sites
 fushan_dates <- camera_dates %>% filter(Location == "Fushan") %>% pull(Daily_Sequence) %>% unique()
 qishan_dates <- camera_dates %>% filter(Location == "Qishan") %>% pull(Daily_Sequence) %>% unique()
 
-# 取交集：得出 Fushan 和 Qishan 同时存在相机工作的日期
-# 注意：intersect 运算可能会剥夺 Date 属性变回数值，使用 as.Date 还原
+# Intersection: dates when both Fushan and Qishan had cameras operating
+# Note: intersect may coerce Date to numeric; use as.Date to restore Date class
 overlap_dates <- as.Date(intersect(fushan_dates, qishan_dates), origin = "1970-01-01")
 
-cat("两个样地同时工作的重叠天数为:", length(overlap_dates), "天\n")
+cat("Number of overlapping days when both sites were operating:", length(overlap_dates), "days\n")
 
-# ==============================================================================
-# 3. 读取并清理物种记录数据，应用重叠日期过滤
-# ==============================================================================
+# ===============================================================================
+# 3. Read and clean species records, apply overlap_dates filter
+# ===============================================================================
 data <- read_excel("Data.xlsx")
 speciescount <- read_excel("species_inventory.xlsx")
 
-# 对接物种中文英文名
+# Map species Chinese names to English names
 data <- merge(data, speciescount, by.x="Species", by.y = "Chinese_Name", all.x = TRUE)
 
 data_clean <- data %>% 
   dplyr::select(Location, Camera, Common_Name, Taxonomy, Date, Number) %>%
   filter(Taxonomy %in% c("Bird", "Mammal")) %>%
   
-  # 应用常规清理规则
+  # Apply standard cleaning rules
   filter(!Common_Name %in% c("feral dog", "feral cat", "bat", "rat", "shrew")) %>%
   filter(!Camera %in% c("FT10", "FT11", "FT12", "FT13", "FT14")) %>%
   mutate(Camera = case_when(
@@ -170,19 +170,19 @@ data_clean <- data %>%
     TRUE ~ Camera
   )) %>%
   
-  # 关键步骤：转换 Date 格式，并仅保留在重叠日期 (overlap_dates) 内的记录
+  # Key step: convert Date format and keep only records within overlap_dates
   mutate(Date = as.Date(Date)) %>%
   filter(Date %in% overlap_dates) %>%
   
-  # 筛选目标类群 (以哺乳动物为例)
+  # Filter target taxa (Example here uses Bird)
   filter(Taxonomy == "Bird") %>%
   arrange(Camera)
 
-# ==============================================================================
-# 4. 构建群落矩阵 (Community Matrix) 与元数据 (Metadata)
-# ==============================================================================
+# ===============================================================================
+# 4. Build community matrix and metadata
+# ===============================================================================
 community_matrix <- data_clean %>%
-  # 确保每台相机每个物种只记一次 1 (Presence/Absence)
+  # Ensure each camera-species pair is counted once (presence/absence)
   distinct(Camera, Common_Name) %>% 
   mutate(Present = 1) %>%
   pivot_wider(
@@ -192,35 +192,35 @@ community_matrix <- data_clean %>%
   ) %>%
   column_to_rownames(var = "Camera")
 
-# 如果由于严格的日期筛选导致某些相机在交集时间内什么都没拍到，它会从矩阵中消失。
-# 这在生态学矩阵分析中是正确的处理方式 (去除了全为 0 的空样方)。
+# If strict date filtering causes some cameras to have no records in the intersection,
+# they will disappear from the matrix. This is the correct ecological handling (remove all-zero samples).
 metadata <- data_clean %>%
   distinct(Camera, Location) %>%
   slice(match(rownames(community_matrix), Camera)) %>%
   column_to_rownames(var = "Camera")
 
-# ==============================================================================
-# 5. 群落结构分析：NMDS 与 ANOSIM
-# ==============================================================================
-# 计算 Jaccard 距离矩阵 (适用于二元有无数据)
+# ===============================================================================
+# 5. Community analysis: NMDS and ANOSIM
+# ===============================================================================
+# Compute Jaccard distance matrix (suitable for binary presence/absence)
 dist_matrix <- vegdist(community_matrix, method = "jaccard", binary = TRUE)
 
-# ANOSIM 分析
+# ANOSIM analysis
 anosim_result <- anosim(dist_matrix, metadata$Location)
 
-# NMDS 降维
+# NMDS ordination
 nmds_result <- metaMDS(dist_matrix, k = 2, trymax = 100)
 
-# ==============================================================================
-# 6. 数据可视化 (ggplot2)
-# ==============================================================================
-# 提取坐标数据供绘图使用
+# ===============================================================================
+# 6. Data visualization (ggplot2)
+# ===============================================================================
+# Extract coordinates for plotting
 nmds_scores <- as.data.frame(scores(nmds_result, display = "sites"))
 nmds_scores$Location <- metadata$Location
-# 修复提取 Camera 名称的潜在 Bug (利用 rownames 而非已被设为行名的 metadata$Camera)
+# Fix potential bug when extracting Camera names (use rownames of metadata)
 nmds_scores$Camera <- rownames(metadata)
 
-# 计算凸包 (Convex Hulls) 边界
+# Calculate convex hull boundaries
 hull_data <- nmds_scores %>%
   group_by(Location) %>%
   slice(chull(NMDS1, NMDS2))
@@ -230,11 +230,11 @@ zone_colors <- c(
   Qishan = "#0072B2"
 )
 
-# 绘制 NMDS 散点图
+# Plot NMDS scatter
 ggplot(nmds_scores, aes(x = NMDS1, y = NMDS2, color = Location, fill = Location)) +
   geom_polygon(data = hull_data, alpha = 0.3) +
   geom_point(size = 3) +
-  # 若需显示相机编号，取消下方注释即可
+  # To show camera labels, uncomment the line below
   # geom_text(aes(label = Camera), vjust = 1.5, size = 3, show.legend = FALSE) +
   theme_minimal() +
   scale_color_manual(values = zone_colors) +
@@ -253,7 +253,7 @@ ggplot(nmds_scores, aes(x = NMDS1, y = NMDS2, color = Location, fill = Location)
 ```
 
 
-#RAI排名
+# RAI ranking
 ```{r}
 library(tidyverse)
 speciescount
@@ -320,7 +320,7 @@ ggsave(
 )
 ```
 
-#GLM 计算物种数量差异 旧
+# GLM: calculate species number differences (old)
 ```{r}
 library(MASS)
 library(tidyverse)
@@ -348,25 +348,25 @@ glm_input <- glm_input %>%
 
 model_nb <- glm.nb(Species_Number ~ Location + offset(log(Duration)), data = glm_input, control = glm.control(maxit = 100))
 summary(model_nb)
-#不包括FT机位时p = 0.187, 包括时0.433，
+# Excluding FT cameras: p = 0.187; including them: 0.433
 
 d_squared <- 1 - (model_nb$deviance / model_nb$null.deviance)
-#bird
+# bird
 ```
 
-#GLMM 计算物种数量差异 最新版挪到FZ_new
+# GLMM calculate species number differences — latest version moved to FZ_new
 ```{r}
 library(readxl)
 library(dplyr)
 library(ggplot2)
 library(lubridate)
 library(tidyverse)
-library(glmmTMB) # 用于拟合 GLMM
-library(MuMIn) # 用于计算 GLMM 的 R-squared (见代码末尾)
+library(glmmTMB) # for fitting GLMMs
+library(MuMIn) # for GLMM R-squared (used at end)
 
 data <- read_excel("Data.xlsx")
 speciescount <- read_excel("species_inventory.xlsx")
-#对接物种中文英文名
+# Map species Chinese names to English names
 data <- merge(data,speciescount,by.x="Species",by.y = "Chinese_Name",all.x = TRUE)
 data <- data %>% filter(Taxonomy %in% c("Bird","Mammal"))
 data_clean <- data %>% dplyr::select(Location, Camera, Common_Name, Taxonomy, Date, Number)
@@ -388,57 +388,55 @@ data_clean <- data_clean %>%
   # 4. Rerank (sort) the dataframe by Camera
   arrange(Camera)
 
-# 1. 时间过滤 (理顺了原代码的覆盖逻辑，避免覆盖原始的 data_clean)
+# 1. Time filtering (fixes overwriting issues in original code, avoids overwriting original data_clean)
 data_time_controlled <- data_clean %>%
-  # 确保 Date 列是 Date 对象
+  # Ensure Date column is a Date object
   mutate(Date = as.Date(Date)) %>% 
-  # 筛选时间范围
+  # Filter date range
   filter(Date >= as.Date("2024-07-05") & Date <= as.Date("2025-02-10"))
 
-# 2. 类群筛选
+# 2. Taxa filtering
 data_filtered <- data_time_controlled %>%
   filter(Taxonomy %in% c("Mammal", "Bird")) %>% 
-  # 剔除不需要的物种
+  # Exclude unwanted species
   filter(!Common_Name %in% c("bat", "rat", "shrew", "leaf warbler"))
 
-# 3. 统计物种数：在 group_by 中加入 Taxonomy，生成长数据
+# 3. Count species: include Taxonomy in grouping to produce long data
 glmm_input <- data_filtered %>%
   group_by(Location, Camera, Taxonomy) %>% 
   summarise(
     Species_Number = n_distinct(Common_Name[Common_Name != "No_Species_Detected"]),
     .groups = 'drop'
   ) %>%
-  # 关键修复：确保每一个 (Location, Camera) 组合，都必须有 Mammal 和 Bird 两行
-  # 如果没有，就自动补齐，并把 Species_Number 填充为 0
+  # Critical fix: ensure every (Location, Camera) has both Mammal and Bird rows
+  # If missing, complete and fill Species_Number with 0
   complete(nesting(Location, Camera), Taxonomy, fill = list(Species_Number = 0))
 
-# 4. 关联相机工作时间
+# 4. Join camera effort
 monitoring_days <- read_excel("monitoring_days.xlsx")
 
 glmm_input <- glmm_input %>% 
   left_join(monitoring_days %>% dplyr::select(Camera, Duration), by = "Camera") %>%
-  # 过滤掉由于没有工作时间数据而产生 NA 的行（如果有的话），防止模型报错
+  # Remove rows with missing Duration to avoid model errors
   filter(!is.na(Duration)) 
 
-# 5. 拟合 GLMM (主效应方案)
-# 使用 + 号连接固定效应，Camera 作为随机效应，使用负二项分布 nbinom2
+# 5. Fit GLMM (additive fixed effects)
+# Use + to join fixed effects, Camera as random effect, negative binomial family (nbinom2)
 model_glmm_add <- glmmTMB(
   Species_Number ~ Location + Taxonomy + offset(log(Duration)) + (1|Camera), 
   data = glmm_input, 
   family = nbinom2
 )
 
-# 查看模型结果
+# View model results
 summary(model_glmm_add)
 
-# 6. 计算模型的解释度 (R-squared)
-# 混合模型不再使用 deviance 直接计算 D-squared。
-# 推荐使用 MuMIn 包计算，它会返回 R2m (边际R2：仅固定效应的解释度) 和 R2c (条件R2：固定+随机效应的总解释度)
-# 如果还未安装，请先运行 install.packages("MuMIn")
+# 6. Compute model R-squared
+# For mixed models we recommend MuMIn::r.squaredGLMM which returns R2m (marginal) and R2c (conditional)
 MuMIn::r.squaredGLMM(model_glmm_add)
 ```
 
-#GLMM 计算RAI差异 旧
+# GLMM RAI differences (old)
 ```{r}
 library(glmmTMB)
 library(emmeans)
@@ -467,7 +465,7 @@ abundance_camera <- abundance_camera %>% rename(Species = Common_Name)
 library(glmmTMB) # Recommended for Negative Binomial models
 # OR library(lme4)
 
-# 样地对所有共有物种的影响
+# Effect of site on all shared species
 model_abundance <- glmmTMB(
   Count ~ Location +                # Fixed Effect (The main question)
           offset(log(Duration)) +   # Offset (Correcting for effort)
@@ -486,7 +484,7 @@ r2(model_abundance)
 ```
 
 ```{r}
-# 样地对每个共有物种的影响
+# Effect of site on each shared species
 model_sp <- glmmTMB(
   Count ~ Location * Species +                # Fixed Effect (The main question)
           offset(log(Duration)) +   # Offset (Correcting for effort)
@@ -503,7 +501,8 @@ r2(model_sp)
 results <- emmeans(model_sp, specs = pairwise ~ Location | Species)
 summary(results$contrasts)
 ```
-#繁殖季节性
+
+# Breeding seasonality
 ```{r}
 library(readxl)
 library(dplyr)
@@ -528,7 +527,7 @@ data_filtered$MonthDay <- as.Date(format(data_filtered$Date, "2024-%m-%d"))
 data_filtered
 
 data_filtered <- data_filtered %>%
-  mutate(Desc = factor(Desc, levels = c("infant", "subadult"))) %>%  # 强制顺序
+  mutate(Desc = factor(Desc, levels = c("infant", "subadult"))) %>%  # Force order
   arrange(Desc)
 
 p3 <- ggplot(data_filtered, aes(x = MonthDay, y = Common_Name, color = Desc)) +
@@ -557,7 +556,7 @@ p3 <- ggplot(data_filtered, aes(x = MonthDay, y = Common_Name, color = Desc)) +
     legend.text = element_text(size = 9),
     plot.margin = unit(c(5, 15, 5, 5), "pt")
   ) +
-  # 纵向压缩调整
+  # Vertical compression adjustment
   coord_fixed(ratio = 60)
 
 ggsave(
