@@ -11,7 +11,7 @@ library(ggplot2)
 library(lubridate)
 data <- read_excel("Data.xlsx")
 speciescount <- read_excel("species_inventory.xlsx")
-#对接物种中文英文名
+# Map species Chinese names to English names
 data <- merge(data,speciescount,by.x="Species",by.y = "Chinese_Name",all.x = TRUE)
 data <- data %>% filter(Taxonomy %in% c("Bird","Mammal"))
 dataF <- subset(data, Camera %in% c("F1","F2","F3","F4","F5","F6","F8","F9","FT10","FT11","FT12","FT13","FT14"))
@@ -20,10 +20,10 @@ dataQ <- subset(data, Camera %in% c("Q1","Q2","Q3","Q4","Q5","Q6","Q7","QT7","Q8
 data_clean <- data %>% dplyr::select(Location, Camera, Common_Name, Taxonomy, Date, Number)
 
 data_clean <- data_clean %>%
-  # 1. Remove rows where Common_Name is feral dog or feral cat
+  # 1. Remove small mammals and unwanted records
   filter(!Common_Name %in% c("rat","shrew","bat","leaf warbler")) %>%
   
-  # 2. Remove rows where Camera is one of the FT series listed
+  # 2. Remove FT series cameras
   filter(!Camera %in% c("FT10", "FT11", "FT12", "FT13", "FT14")) %>%
   
   # 3. Rename QT7 to Q7 and QT10 to Q10
@@ -33,7 +33,7 @@ data_clean <- data_clean %>%
     TRUE ~ Camera # Keep all other camera names the same
   )) %>%
   
-  # 4. Rerank (sort) the dataframe by Camera
+  # 4. Sort by Camera
   arrange(Camera)
 
 data_time_controlled <- data_clean %>%
@@ -53,39 +53,39 @@ data_mammal <- data %>% filter(Taxonomy == "Mammal")
 data_mammal <- subset(data_mammal, !(Common_Name%in% c("rat","shrew","bat")))
 
 data_extrapo_mammal <- data_mammal %>%
-  # 确保日期格式正确
+  # Ensure Date formatting is correct
   mutate(Date = as.Date(Date)) %>%
-  # 按物种和样地分组，计算每个物种在每个样地的唯一记录天数
+  # For each species and site, count distinct recording days
   group_by(Common_Name, Location) %>%
   summarise(Days_Recorded = n_distinct(Date), .groups = 'drop') %>%
-  # 转换数据格式：物种为行，样地为列
+  # Pivot to species rows and site columns
   pivot_wider(
     names_from = Location,
     values_from = Days_Recorded,
-    values_fill = 0  # 将缺失值填充为0
+    values_fill = 0  # Fill missing with 0
   ) %>%
-  # 重命名第一列为"Species"
+  # Rename first column to 'Species'
   rename(Species = `Common_Name`)
 
 first_row_values <- c(2673,1839)
-# 获取样地列名（排除Species列）
+# Get site column names (excluding Species)
 location_columns <- colnames(data_extrapo_mammal)[-1]
 
-# 创建第一行数据
+# Create first row as sample sizes
 first_row <- data.frame(
-  Species = "Sample_Size",  # 第一行的标识
+  Species = "Sample_Size",  # Identifier for first row
   matrix(first_row_values, nrow = 1, 
          dimnames = list(NULL, location_columns))
 )
 
-# 将第一行添加到数据框
+# Bind first row
 data_extrapo_mammal <- bind_rows(first_row, data_extrapo_mammal)
 data_extrapo_mammal <- data_extrapo_mammal %>% select(Fushan, Qishan)
 
 inext_result_mammal = iNEXT(data_extrapo_mammal, 
   q = 0,                   
   datatype = 'incidence_freq',
-  endpoint = 5000,           # 外推终点
+  endpoint = 5000,           # Extrapolation endpoint
   nboot = 1000,
   knots = 40)
 
@@ -116,38 +116,36 @@ data_bird <- data %>% filter(Taxonomy == "Bird")
 data_bird <- subset(data_bird, Common_Name != "leaf warbler")
 
 data_extrapo_bird <- data_bird %>%
-  # 确保日期格式正确
+  # Ensure Date formatting is correct
   mutate(Date = as.Date(Date)) %>%
-  # 按物种和样地分组，计算每个物种在每个样地的唯一记录天数
+  # For each species and site, count distinct recording days
   group_by(Common_Name, Location) %>%
   summarise(Days_Recorded = n_distinct(Date), .groups = 'drop') %>%
-  # 转换数据格式：物种为行，样地为列
   pivot_wider(
     names_from = Location,
     values_from = Days_Recorded,
-    values_fill = 0  # 将缺失值填充为0
+    values_fill = 0
   ) %>%
-  # 重命名第一列为"Species"
   rename(Species = `Common_Name`)
 
-# 获取样地列名（排除Species列）
+# Get site column names (excluding Species)
 location_columns <- colnames(data_extrapo_bird)[-1]
 
-# 创建第一行数据
+# Create first row as sample sizes
 first_row <- data.frame(
-  Species = "Sample_Size",  # 第一行的标识
+  Species = "Sample_Size",  # Identifier for first row
   matrix(first_row_values, nrow = 1, 
          dimnames = list(NULL, location_columns))
 )
 
-# 将第一行添加到数据框
+# Bind first row
 data_extrapo_bird <- bind_rows(first_row, data_extrapo_bird)
 data_extrapo_bird <- data_extrapo_bird %>% select(Fushan, Qishan)
 
 inext_result_bird = iNEXT(data_extrapo_bird, 
   q = 0,                   
   datatype = 'incidence_freq',
-  endpoint = 5000,           # 外推终点
+  endpoint = 5000,           # Extrapolation endpoint
   nboot = 500,
   knots = 40)
 
